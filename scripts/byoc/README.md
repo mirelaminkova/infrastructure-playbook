@@ -166,3 +166,19 @@ bare git remote, and a fake `gh` and Galaxy API.
    jobs *require* their Pulsar, so tools exceeding its limits fail. `prefer`
    would fall back to usegalaxy.eu but depends on the ranking function
    (`weighted_random_sampling`).
+9. **Multiple job handlers.** Every handler that loads a relay runner
+   receives every status update, and Galaxy 26.x can then finish a job
+   twice. The existing `pulsar_eu_nemo*` runners share this. Per-user relay
+   runners need a single-handler assignment or a Galaxy fix.
+10. **Lost status updates after a handler restart.** Galaxy keeps the relay
+    cursor in memory only, and `PULSAR_PARAM_SPECS` does not accept
+    `relay_cursor_path` / `relay_handler_id`, so the generated runner cannot
+    set them either. Upstream Galaxy work is needed.
+11. **Manager name.** If BYOC Pulsars use a non-default manager (as upstream
+    BYOC galaxyproject/galaxy#22781 does), the form needs a field and the
+    relay runner a `manager` param.
+12. **Credential charset.** The form follows `configure.py`
+    (`[A-Za-z0-9._~+=@%-]{16,128}`) plus a YAML round-trip check. The relay
+    review recommends tightening both sides to `[A-Za-z0-9]{24,64}`,
+    generated rather than invented. That is a one-line change in
+    `RELAY_PASSWORD_RE` plus the form label.
