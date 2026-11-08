@@ -1,0 +1,25 @@
+---
+name: BYOC sync tests
+
+"on":
+  pull_request:
+    paths:
+      - "scripts/byoc/**"
+      - "files/galaxy/config/user_preferences_extra_conf.yml"
+      - "files/galaxy/tpv/tool_defaults.yml.j2"
+      - "files/galaxy/tpv/destinations.yml.j2"
+      - "templates/galaxy/config/job_conf.yml*"
+      - "group_vars/mq.yml"
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version-file: ".python-version"
+      - run: >-
+          pip install -r scripts/byoc/requirements.txt
+          -r scripts/byoc/requirements-tpv.txt
+      - run: python -m pytest -q scripts/byoc/tests

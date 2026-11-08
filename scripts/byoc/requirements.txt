@@ -1,0 +1,6 @@
+# byoc_sync.py and its tests
+ansible-core~=2.21
+Jinja2~=3.1
+PyYAML~=6.0
+requests~=2.32
+pytest~=9.0
