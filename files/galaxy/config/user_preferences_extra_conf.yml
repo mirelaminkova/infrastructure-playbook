@@ -164,7 +164,7 @@ preferences:
               type: password
               required: False
             - name: relay_topic_prefix
-              label: "relay (optional): topic prefix configured on your Pulsar, letters, digits, '_' or '-'."
+              label: "relay: topic prefix configured on your Pulsar (SURF Research Cloud component: src; leave empty only if your Pulsar uses none). Must match exactly, otherwise jobs stay queued."
               type: text
               required: False
             - name: jobs_directory
