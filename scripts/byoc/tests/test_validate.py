@@ -274,3 +274,61 @@ def test_masked_password_reported(relay_prefs):
     relay_prefs["relay_password"] = "__SECRET_PLACEHOLDER__"
     with pytest.raises(ByocValidationError, match="masked"):
         validate(RELAY_USER, relay_prefs)
+
+
+def test_central_valid(central_prefs):
+    """Central: no URL, the account is named after the user."""
+    cfg = validate(RELAY_USER, central_prefs)
+    assert cfg.relay_placement == "central"
+    assert cfg.relay_url is None
+    assert cfg.relay_username == "byoc_" + RELAY_USER
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"relay_url": "https://stargate.galaxyproject.eu/"},
+        {"relay_url": "https://STARGATE.galaxyproject.eu"},
+        {"relay_username": "byoc_" + RELAY_USER},
+        {"relay_placement": "Central"},
+    ],
+)
+def test_central_accepts_redundant_values(central_prefs, extra):
+    """The stargate URL or the assigned username may be typed in."""
+    central_prefs.update(extra)
+    assert validate(RELAY_USER, central_prefs).relay_placement == "central"
+
+
+@pytest.mark.parametrize(
+    "extra, message",
+    [
+        ({"relay_url": "https://relay.example.org"}, "must be empty"),
+        ({"relay_username": "galaxy-pulsar"}, "leave the field empty"),
+        # someone else's account on the shared relay
+        ({"relay_username": "byoc_" + MQ_USER}, "leave the field empty"),
+        ({"relay_username": "nemo"}, "leave the field empty"),
+        ({"relay_password": "short"}, "relay_password"),
+        ({"relay_password": ""}, "relay_password"),
+        ({"relay_placement": "elsewhere"}, "relay_placement"),
+    ],
+)
+def test_central_rejected(central_prefs, extra, message):
+    """Central accounts cannot be renamed or pointed elsewhere."""
+    central_prefs.update(extra)
+    with pytest.raises(ByocValidationError, match=message):
+        validate(RELAY_USER, central_prefs)
+
+
+def test_placement_default(relay_prefs, central_prefs):
+    """Unset placement: own with a URL (older forms), else central."""
+    assert validate(RELAY_USER, relay_prefs).relay_placement == "own"
+    del central_prefs["relay_placement"]
+    assert validate(RELAY_USER, central_prefs).relay_placement == "central"
+
+
+def test_own_relay_cannot_be_stargate(relay_prefs):
+    """Typing the central relay as 'own' points the user to 'central'."""
+    relay_prefs["relay_placement"] = "own"
+    relay_prefs["relay_url"] = "https://stargate.galaxyproject.eu"
+    with pytest.raises(ByocValidationError, match="'central'"):
+        validate(RELAY_USER, relay_prefs)

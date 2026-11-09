@@ -39,7 +39,7 @@ def _template(value, env, variables):
     return value
 
 
-def rendered_runners(root, vault):
+def rendered_runners(root, vault, extra=None):
     """Render job_conf.yml through job_conf.yml.j2 as Ansible would.
 
     Only the ``runners:`` part of the template is rendered; that is where
@@ -53,6 +53,7 @@ def rendered_runners(root, vault):
         i["key"]: i["value"] for i in items
     }
     variables = vault_vars(root, vault)
+    variables.update(extra or {})
     jobconf = yaml.safe_load((root / bs.JOB_CONF).read_text())
     variables["galaxy_jobconf"] = _template(
         jobconf["galaxy_jobconf"], env, variables
@@ -296,3 +297,44 @@ def test_vault_ignores_env_and_ansible_cfg(
     monkeypatch.chdir(tmp_path)
     cfg, _ = add(checkout, vault, MQ_USER, mq_prefs)
     assert "MyPulS4rP4ssw0rd" in vault.read(checkout / bs.MQ_VAULT)
+
+
+def sn09_relay_vars():
+    """Return the central relay URL variable as Ansible resolves it."""
+    sn09 = yaml.safe_load((REPO / "group_vars/sn09/sn09.yml").read_text())
+    value = jinja2.Environment().from_string(sn09[bs.CENTRAL_RELAY_VAR])
+    return {bs.CENTRAL_RELAY_VAR: value.render(**sn09)}
+
+
+def test_central_relay_runner(checkout, vault, central_prefs):
+    """Central: stargate URL via sn09, account byoc_<id>, no URL typed."""
+    cfg, change = add(checkout, vault, RELAY_USER, central_prefs)
+    job_conf = (checkout / bs.JOB_CONF).read_text()
+    assert f'relay_url: "{{{{ {bs.CENTRAL_RELAY_VAR} }}}}"' in job_conf
+    runner = rendered_runners(checkout, vault, sn09_relay_vars())[
+        f"pulsar_{cfg.slug}"
+    ]
+    assert {k for k in runner if k.startswith("relay_")} <= GALAXY_RELAY_PARAMS
+    # same relay as the production NEMO runners
+    assert runner["relay_url"] == "https://stargate.galaxyproject.eu/"
+    assert runner["relay_username"] == "byoc_" + RELAY_USER
+    assert runner["relay_password"] == central_prefs["relay_password"]
+    assert "relay_topic_prefix" not in runner
+    assert set(change.vault) == {bs.RELAY_VAULT}
+    assert cfg.slug not in (checkout / bs.MQ_VARS).read_text()
+
+
+def test_switch_own_to_central(checkout, vault, relay_prefs, central_prefs):
+    """Moving to the central relay rewrites the runner and the username."""
+    add(checkout, vault, RELAY_USER, relay_prefs)
+    cfg, change = add(checkout, vault, RELAY_USER, central_prefs)
+    assert change.action == "update"
+    assert change.vault[bs.RELAY_VAULT] == {
+        bs.relay_username_var(cfg.slug): "set",
+        bs.relay_password_var(cfg.slug): "set",
+    }
+    runner = rendered_runners(checkout, vault, sn09_relay_vars())[
+        f"pulsar_{cfg.slug}"
+    ]
+    assert runner["relay_url"] == "https://stargate.galaxyproject.eu/"
+    assert runner["relay_username"] == cfg.slug

@@ -14,10 +14,19 @@ Two transports are supported:
     a ``rabbitmq_users`` entry, a ``PulsarMQJobRunner`` with ``amqp_url``
     and the password in ``secret_group_vars/pulsar.yml``.
 ``relay``
-    An HTTPS pulsar-relay (e.g. the SURF Research Cloud component): a
-    ``PulsarMQJobRunner`` with ``relay_url``/``relay_username``/
-    ``relay_password`` (+ optional ``relay_topic_prefix``), credentials in
+    An HTTPS pulsar-relay: a ``PulsarMQJobRunner`` with ``relay_url``/
+    ``relay_username``/``relay_password`` (+ optional
+    ``relay_topic_prefix``), credentials in
     ``group_vars/pulsar_relay/vault.yml`` like the NEMO relay runners.
+    Two placements (``relay_placement``):
+
+    ``central``
+        usegalaxy.eu's relay (stargate.galaxyproject.eu), as for NEMO. The
+        relay account is ``byoc_<user id>``; the user picks its password.
+        byoc_relay_accounts.py creates the account after the PR is merged.
+    ``own``
+        the user's own relay (e.g. the SURF Research Cloud component) at
+        ``relay_url``, with the pair account set up on the user's VM.
 
 Every generated block is fenced by ``# BEGIN BYOC <slug>`` / ``# END BYOC
 <slug>`` markers so it can be replaced or removed without touching the
@@ -62,6 +71,12 @@ VAULT_FILES = (MQ_VAULT, RELAY_VAULT)
 
 MQ_HOST = "mq.galaxyproject.eu:5671"
 GALAXY_URL = "https://usegalaxy.eu"
+# The central relay. Runners reference the variable (group_vars/sn09) so the
+# URL lives next to pulsar_nemo_relay_url; the host is only used to tell
+# users who type it as their "own" relay to pick "central" instead.
+CENTRAL_RELAY_VAR = "pulsar_byoc_central_relay_url"
+CENTRAL_RELAY_HOST = "stargate.galaxyproject.eu"
+RELAY_PLACEMENTS = ("central", "own")
 
 # Galaxy encoded ids: hex, one or two 8-byte blowfish blocks.
 USER_ID_RE = re.compile(r"[0-9a-f]{16}|[0-9a-f]{32}")
@@ -128,7 +143,8 @@ class ByocConfig:
     jobs_directory: Optional[str] = None
     mq_username: Optional[str] = None
     mq_password: Optional[str] = dataclasses.field(default=None, repr=False)
-    relay_url: Optional[str] = None
+    relay_placement: Optional[str] = None  # "central" or "own"
+    relay_url: Optional[str] = None  # None for central
     relay_username: Optional[str] = dataclasses.field(default=None, repr=False)
     relay_password: Optional[str] = dataclasses.field(default=None, repr=False)
     relay_topic_prefix: Optional[str] = None
@@ -254,6 +270,11 @@ def normalize_relay_url(raw: str) -> str:
         or not re.fullmatch(r"[a-z]{2,63}", labels[-1])
     ):
         raise ByocValidationError("relay_url must use a public DNS name")
+    if host == CENTRAL_RELAY_HOST:
+        raise ByocValidationError(
+            "relay_url is usegalaxy.eu's relay; choose the 'central' "
+            "relay placement instead"
+        )
     for suffix in FORBIDDEN_HOST_SUFFIXES:
         if host == suffix or host.endswith("." + suffix):
             raise ByocValidationError(
@@ -271,6 +292,20 @@ def is_configured(prefs: dict) -> bool:
     if not isinstance(transport, str):
         return False
     return transport.strip().lower() not in DISABLED_TRANSPORTS
+
+
+def _relay_placement(prefs: dict) -> str:
+    """Return 'central' or 'own'.
+
+    Unset means 'own' when a relay_url was entered (forms filled in before
+    the placement field existed) and 'central' otherwise.
+    """
+    placement = _text(prefs, "relay_placement").lower()
+    if not placement:
+        return "own" if _text(prefs, "relay_url") else "central"
+    if placement not in RELAY_PLACEMENTS:
+        raise ByocValidationError("relay_placement must be 'central' or 'own'")
+    return placement
 
 
 def validate(user_id: str, prefs: dict) -> Optional[ByocConfig]:
@@ -329,14 +364,32 @@ def validate(user_id: str, prefs: dict) -> Optional[ByocConfig]:
             mq_password=password,
             **resources,
         )
-    relay_url = normalize_relay_url(_text(prefs, "relay_url"))
-    relay_username = _match(
-        RELAY_USERNAME_RE,
-        _text(prefs, "relay_username"),
-        "relay_username",
-        "3-50 letters, digits, '.', '_' or '-' (starting with a letter "
-        "or digit)",
-    )
+    placement = _relay_placement(prefs)
+    if placement == "central":
+        # one account per user on the shared relay, named after the user
+        # so nobody can pick (and take over) someone else's account
+        relay_url = None
+        relay_username = slug_for(user_id)
+        url = _text(prefs, "relay_url")
+        if url and url.rstrip("/").lower() != "https://" + CENTRAL_RELAY_HOST:
+            raise ByocValidationError(
+                "relay_url must be empty for the central relay placement"
+            )
+        typed = _text(prefs, "relay_username")
+        if typed and typed != relay_username:
+            raise ByocValidationError(
+                "on the central relay your relay_username is "
+                f"{relay_username!r}; leave the field empty or enter that"
+            )
+    else:
+        relay_url = normalize_relay_url(_text(prefs, "relay_url"))
+        relay_username = _match(
+            RELAY_USERNAME_RE,
+            _text(prefs, "relay_username"),
+            "relay_username",
+            "3-50 letters, digits, '.', '_' or '-' (starting with a letter "
+            "or digit)",
+        )
     relay_password = _match(
         RELAY_PASSWORD_RE,
         _text(prefs, "relay_password"),
@@ -356,6 +409,7 @@ def validate(user_id: str, prefs: dict) -> Optional[ByocConfig]:
         user_id=user_id,
         transport="relay",
         jobs_directory=jobs_directory,
+        relay_placement=placement,
         relay_url=relay_url,
         relay_username=_yaml_safe(relay_username, "relay_username"),
         relay_password=_yaml_safe(relay_password, "relay_password"),
@@ -424,8 +478,13 @@ def render_runner(cfg: ByocConfig) -> list:
             "    amqp_publish_retry_max_retries: 60",
         ]
     else:
+        url = (
+            f"{{{{ {CENTRAL_RELAY_VAR} }}}}"
+            if cfg.relay_placement == "central"
+            else cfg.relay_url
+        )
         body += [
-            f'    relay_url: "{cfg.relay_url}"',
+            f'    relay_url: "{url}"',
             f'    relay_username: "{{{{ {relay_username_var(slug)} }}}}"',
             f'    relay_password: "{{{{ {relay_password_var(slug)} }}}}"',
         ]
@@ -1131,9 +1190,13 @@ def pr_text(change: Change, fingerprint: str) -> tuple:
                 "",
                 f"- transport: `{cfg.transport}`",
                 (
-                    f"- relay URL: `{cfg.relay_url}`"
-                    if cfg.transport == "relay"
-                    else f"- RabbitMQ user/vhost: `{cfg.mq_username}`"
+                    f"- RabbitMQ user/vhost: `{cfg.mq_username}`"
+                    if cfg.transport == "mq"
+                    else "- relay: central (stargate.galaxyproject.eu), "
+                    f"account `{cfg.relay_username}`; created by "
+                    "byoc_relay_accounts.py after merge"
+                    if cfg.relay_placement == "central"
+                    else f"- relay: user's own, `{cfg.relay_url}`"
                 ),
                 f"- cores <= {cfg.max_accepted_cores}, "
                 f"mem <= {cfg.max_accepted_mem} GB, "
@@ -1158,6 +1221,14 @@ def pr_text(change: Change, fingerprint: str) -> tuple:
             "- [ ] the user is known and allowed to bring their own compute",
             "- [ ] the endpoint belongs to the user's institution / project",
             "- [ ] the resource limits match the endpoint",
+            *(
+                [
+                    "- [ ] the relay account exists after merge "
+                    "(workflow byoc-relay-accounts)"
+                ]
+                if cfg is not None and cfg.relay_placement == "central"
+                else []
+            ),
             "",
             "Generated by `scripts/byoc/byoc_sync.py`; re-running it "
             "updates this PR instead of opening a new one.",

@@ -1,0 +1,52 @@
+---
+# Bring your own compute, variant 2, central relay placement: after a BYOC
+# PR is merged, create or update the user's account on
+# stargate.galaxyproject.eu (the ansible-pulsar-relay role does not manage
+# non-admin accounts). See scripts/byoc/README.md.
+name: BYOC relay accounts
+
+"on":
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only print what would change"
+        type: boolean
+        default: true
+  push:
+    branches: [master]
+    paths:
+      - "templates/galaxy/config/job_conf.yml"
+      - "group_vars/pulsar_relay/vault.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: byoc-relay-accounts
+
+jobs:
+  accounts:
+    # needs the secrets below; never runs in forks
+    if: github.repository == 'usegalaxy-eu/infrastructure-playbook'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version-file: ".python-version"
+      - run: pip install -r scripts/byoc/requirements.txt
+      - name: Reconcile relay accounts
+        env:
+          VAULT_PASSWORD: ${{ secrets.BYOC_VAULT_PASSWORD }}
+          # a dedicated relay admin, not the role's bootstrap admin
+          BYOC_RELAY_ADMIN_USERNAME: ${{ secrets.BYOC_RELAY_ADMIN_USERNAME }}
+          BYOC_RELAY_ADMIN_PASSWORD: ${{ secrets.BYOC_RELAY_ADMIN_PASSWORD }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          umask 077
+          ANSIBLE_VAULT_PASSWORD_FILE="$RUNNER_TEMP/vault_password"
+          printf '%s\n' "$VAULT_PASSWORD" > "$ANSIBLE_VAULT_PASSWORD_FILE"
+          export ANSIBLE_VAULT_PASSWORD_FILE
+          args=()
+          if [ "$DRY_RUN" = "true" ]; then args=(--dry-run); fi
+          python scripts/byoc/byoc_relay_accounts.py "${args[@]}"

@@ -89,6 +89,20 @@ def relay_prefs():
     }
 
 
+@pytest.fixture
+def central_prefs():
+    """Return valid preferences for the central relay (fake password)."""
+    return {
+        "transport": "relay",
+        "relay_placement": "central",
+        "relay_password": "fake-Central-Pass-0042",
+        "max_accepted_cores": 4,
+        "max_accepted_mem": 16,
+        "min_accepted_gpus": 0,
+        "max_accepted_gpus": 0,
+    }
+
+
 def git(*args, cwd):
     """Run git in ``cwd`` and return stdout."""
     return subprocess.run(

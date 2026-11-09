@@ -10,6 +10,7 @@ name: BYOC sync tests
       - "files/galaxy/tpv/destinations.yml.j2"
       - "templates/galaxy/config/job_conf.yml*"
       - "group_vars/mq.yml"
+      - "group_vars/sn09/sn09.yml"
 
 jobs:
   pytest:

@@ -5,9 +5,14 @@
 1. The user sets a credential on their own Pulsar VM (SimpleVM / SURF
    Research Cloud wizard):
    - **mq**: the RabbitMQ username and password the Pulsar uses;
-   - **relay**: the pulsar-relay *pair account* (default user
-     `galaxy-pulsar`) shared by Galaxy and Pulsar. `configure.py` of the
-     SRC relay component takes it from `RELAY_PAIR_PASSWORD`.
+   - **relay, central** (recommended, see below): a password for the
+     account `byoc_<encoded user id>` on usegalaxy.eu's relay
+     (stargate.galaxyproject.eu). The account does not exist yet; it is
+     created after the admin merges the PR;
+   - **relay, own**: the pulsar-relay *pair account* (default user
+     `galaxy-pulsar`) on the user's own relay, shared by Galaxy and Pulsar.
+     `configure.py` of the SRC relay component takes it from
+     `RELAY_PAIR_PASSWORD`.
 2. In usegalaxy.eu, *User → Preferences → Manage information → byoc_pulsar*,
    the user picks a transport and enters the endpoint, the credential and the
    resource limits.
@@ -15,7 +20,9 @@
    validates them and opens **one PR per user** that changes only that
    user's generated blocks and vault entries.
 4. An admin audits and merges the PR and deploys. TPV routes the user's jobs
-   to their Pulsar.
+   to their Pulsar. For the central relay, `byoc_relay_accounts.py`
+   (workflow `byoc-relay-accounts`, on push to master) creates the relay
+   account first.
 
 ```
 user ──prefs──▶ Galaxy (extra_user_preferences, byoc_pulsar|*)
@@ -28,8 +35,37 @@ user ──prefs──▶ Galaxy (extra_user_preferences, byoc_pulsar|*)
  job ─▶ TPV rule byoc_pulsar: require tag byoc-<encoded id> ─▶ pulsar_byoc_<id>_tpv
         ─▶ runner pulsar_byoc_<id> (PulsarMQJobRunner)
            mq:    amqp_url → mq.galaxyproject.eu vhost /pulsar/<user>
-           relay: relay_url/relay_username/relay_password → user's relay ◀─ Pulsar polls
+           relay, central: {{ pulsar_byoc_central_relay_url }} (stargate) ◀─ Pulsar polls
+                           account byoc_<id>, created by byoc_relay_accounts.py
+           relay, own:     relay_url from prefs → user's relay ◀─ Pulsar polls
 ```
+
+## Relay placement: central (recommended) or own
+
+| | **central**: stargate.galaxyproject.eu | **own**: `relay_url` from prefs |
+|---|---|---|
+| matches | the NEMO runners in production today and upstream BYOC (galaxyproject/galaxy#22781: one account per user on a central relay) | the SRC Pulsar Relay workspace as built |
+| relay account | `byoc_<encoded id>`, fixed by the script, so nobody can pick someone else's account. Password chosen by the user | the pair account on the user's VM |
+| who creates it | `byoc_relay_accounts.py` after merge, with a relay admin login in CI | the user's VM (`configure.py`) |
+| Galaxy egress | one known host | HTTPS to any user host (egress policy, TLS, availability per user) |
+| isolation | per account: the relay never lets one account read another's topics | per relay |
+| runs on the VM | Pulsar only | Pulsar + relay + Valkey |
+| main risk | the shared `/auth/login` limit (5/min per IP). Every handler of every BYOC runner re-logs in about every 5 min from usegalaxy.eu's IP(s), which throttles at a few users. Plus a relay admin secret in CI | many relays to trust; Galaxy reaching user hosts |
+
+**Recommendation: central.** It is the pattern usegalaxy.eu already runs
+and audits (NEMO), and it is where upstream is going. It also keeps Galaxy's
+outbound traffic on one host. Before onboarding more than a handful of
+users, two changes are needed on stargate: raise or exempt the login limit
+for Galaxy's addresses, and make the relay see real client IPs behind
+traefik. Otherwise every client shares one 5/min bucket. *Own* stays
+supported for sites that must keep the relay inside their own network. The
+form defaults to central; a `relay_url` from an older form means own.
+
+`byoc_relay_accounts.py` touches only accounts named `byoc_<hex>`. It
+creates the missing ones (permissions `read`, `write`), sets the vault
+password on existing ones, and deactivates (does not delete) those whose
+runner was removed. It logs in once per run and never prints passwords.
+`--dry-run` lists the actions.
 
 ## What a PR changes
 
@@ -44,6 +80,11 @@ by `# BEGIN BYOC byoc_<id>` / `# END BYOC byoc_<id>` and sorted by id:
 | `secret_group_vars/pulsar.yml` (vault) | `rabbitmq_password_galaxy_byoc_<id>` | – |
 | `group_vars/pulsar_relay/vault.yml` (vault) | – | `vault_pulsar_byoc_<id>_relay_username`, `..._relay_password` |
 
+For the central placement the runner's `relay_url` is
+`{{ pulsar_byoc_central_relay_url }}`, defined once in
+`group_vars/sn09/sn09.yml` as `{{ pulsar_nemo_relay_url }}`, and the
+username is always `byoc_<id>`.
+
 `<id>` is the user's Galaxy encoded id. The PR shows the transport, relay URL
 or RabbitMQ user and the limits, never a credential or an email address.
 
@@ -57,7 +98,7 @@ existing `pulsar_eu_nemo` runners.
 One-off changes (in the PR that adds this script, not per user):
 
 - `files/galaxy/config/user_preferences_extra_conf.yml`: `transport`
-  (Disabled / mq / relay), `relay_url`, `relay_username`, `relay_password`,
+  (Disabled / mq / relay), `relay_placement` (central / own), `relay_url`, `relay_username`, `relay_password`,
   `relay_topic_prefix`, `jobs_directory`. The existing fields keep their
   names, so stored values stay valid.
 - `files/galaxy/tpv/tool_defaults.yml.j2`: rule `byoc_pulsar`. It adds
@@ -76,9 +117,13 @@ One-off changes (in the PR that adds this script, not per user):
 - mq: username `[a-z0-9][a-z0-9_]{2,31}` and not `galaxy_*`, `mqadmin` or
   `guest`. It must not already be a RabbitMQ user, and two users cannot pick
   the same name. Password `[A-Za-z0-9]{10,128}`.
-- relay: URL `https://host[:port]` only, normalized to the origin. No userinfo,
+- relay, central: `relay_url` empty (or the stargate URL) and
+  `relay_username` empty (or exactly `byoc_<own id>`), so no one can
+  choose another account on the shared relay.
+- relay, own: URL `https://host[:port]` only, normalized to the origin. No userinfo,
   path, query or fragment, no IP literal, no single-label host, no
-  `galaxyproject.eu` / `usegalaxy.eu` / `.privat` / `.local` / `.internal`.
+  `galaxyproject.eu` / `usegalaxy.eu` / `.privat` / `.local` / `.internal`
+  (stargate gets a hint to pick central).
   Username: `configure.py`'s `PAIR_USERNAME_PATTERN`. Password:
   `PAIR_PASSWORD_PATTERN` (`[A-Za-z0-9._~+=@%-]{16,128}`). Topic prefix
   `[A-Za-z0-9_-]{1,50}`.
@@ -121,6 +166,15 @@ python scripts/byoc/byoc_sync.py --prefs-json export.json --dry-run  # offline
 `.github/workflows/byoc-sync.yml` runs it daily, but only in
 `usegalaxy-eu/infrastructure-playbook` and only once the `BYOC_*` secrets
 exist.
+
+```bash
+export BYOC_RELAY_ADMIN_USERNAME=... BYOC_RELAY_ADMIN_PASSWORD=...
+python scripts/byoc/byoc_relay_accounts.py --dry-run   # list actions
+python scripts/byoc/byoc_relay_accounts.py             # create/update
+```
+
+`.github/workflows/byoc-relay-accounts.yml` runs it on pushes to master
+that touch `job_conf.yml` or the relay vault, again only in usegalaxy-eu.
 
 ## Tests
 
@@ -182,3 +236,16 @@ bare git remote, and a fake `gh` and Galaxy API.
     review recommends tightening both sides to `[A-Za-z0-9]{24,64}`,
     generated rather than invented. That is a one-line change in
     `RELAY_PASSWORD_RE` plus the form label.
+13. **Relay placement and admin rights.** Is central (recommended) the
+    default the admins want? pulsar-relay permissions are flat, so the CI
+    relay admin could also change the NEMO accounts. Use a dedicated admin
+    account, not the role's bootstrap admin, and rotate it. Alternatively an
+    admin runs `byoc_relay_accounts.py` by hand after each merge.
+14. **Login rate limit on stargate.** `/auth/login` allows 5/min per client
+    IP. With N central BYOC runners × H Galaxy handlers each re-logging in
+    about every 5 minutes, usegalaxy.eu exceeds that at a few users.
+    Configure `PULSAR_RATE_LIMIT_STORAGE_URI`/limits and trusted proxy
+    headers before scaling, or wait for refresh-token login (#22781).
+15. **How users learn their account name.** `byoc_<encoded id>` (from
+    `/api/users/current`) is clumsy. The form could show it, or the merged
+    PR could notify the user.
