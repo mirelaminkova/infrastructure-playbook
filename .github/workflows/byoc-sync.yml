@@ -1,0 +1,56 @@
+---
+# Bring your own compute, variant 2: turn users' byoc_pulsar preferences
+# into one PR per user (see scripts/byoc/README.md). Nothing is merged
+# automatically; an admin reviews every PR.
+name: BYOC sync
+
+"on":
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only print what would change"
+        type: boolean
+        default: true
+  schedule:
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: byoc-sync
+
+jobs:
+  sync:
+    # needs the secrets below; never runs in forks
+    if: github.repository == 'usegalaxy-eu/infrastructure-playbook'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version-file: ".python-version"
+      - run: pip install -r scripts/byoc/requirements.txt
+      - name: Sync
+        env:
+          GALAXY_URL: https://usegalaxy.eu
+          GALAXY_API_KEY: ${{ secrets.BYOC_GALAXY_ADMIN_API_KEY }}
+          VAULT_PASSWORD: ${{ secrets.BYOC_VAULT_PASSWORD }}
+          BYOC_FINGERPRINT_KEY: ${{ secrets.BYOC_FINGERPRINT_KEY }}
+          # a token of a bot account or GitHub App, so that the PRs it
+          # opens trigger the usual CI (GITHUB_TOKEN PRs do not)
+          GH_TOKEN: ${{ secrets.BYOC_GH_TOKEN }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          umask 077
+          ANSIBLE_VAULT_PASSWORD_FILE="$RUNNER_TEMP/vault_password"
+          printf '%s\n' "$VAULT_PASSWORD" > "$ANSIBLE_VAULT_PASSWORD_FILE"
+          export ANSIBLE_VAULT_PASSWORD_FILE
+          git config user.name "usegalaxy-eu-bot"
+          git config user.email "usegalaxy-eu-bot@users.noreply.github.com"
+          args=(--repo "$GITHUB_REPOSITORY" --base "${{ github.event.repository.default_branch }}")
+          if [ "$DRY_RUN" = "true" ]; then args=(--dry-run); fi
+          python scripts/byoc/byoc_sync.py "${args[@]}"

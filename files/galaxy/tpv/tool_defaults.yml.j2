@@ -198,6 +198,27 @@ tools:
           retval
         fail: |
           Invalid 'Remote resources id' selected in the config menu under 'User -> Preferences -> Manage Information -> Use distributed compute resources'. Please reselect either 'default' or an appropriate remote resource then click 'Save' and rerun your job.
+      - id: byoc_pulsar
+        # Bring your own compute (variant 2): scripts/byoc/byoc_sync.py adds a
+        # destination requiring "byoc-<encoded user id>" once an admin merged the
+        # user's PR. Only that user's jobs can carry the tag (it is derived from
+        # user.id, not from anything the user types). It applies while the user
+        # keeps the BYOC transport enabled and has not picked another remote
+        # resource; internal tools never leave Galaxy, as for remote_resources.
+        if: |
+          retval = False
+          if not (job_wrapper is None) and user is not None and "internal" not in {tag.value for tag in entity.tpv_tags.tags}:
+              user_preferences = user.extra_preferences
+              if user_preferences.get("byoc_pulsar|transport") in ("mq", "relay") and user_preferences.get("distributed_compute|remote_resources", "None") in ("None", None, ""):
+                  byoc_tag = "byoc-" + app.security.encode_id(user.id)
+                  retval = any(any(d.tpv_dest_tags.filter(tag_value=byoc_tag)) for d in mapper.destinations.values())
+          retval
+        execute: |
+          from tpv.core.entities import SchedulingTags
+
+          entity.tpv_tags = entity.tpv_tags.combine(
+              SchedulingTags(require=["byoc-" + app.security.encode_id(user.id)])
+          )
     rank: |
       final_destinations = helpers.weighted_random_sampling(candidate_destinations)
       final_destinations
