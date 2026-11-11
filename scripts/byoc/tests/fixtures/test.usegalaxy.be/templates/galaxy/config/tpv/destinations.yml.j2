@@ -1,0 +1,15 @@
+---
+destinations:
+  _pulsar:
+    abstract: true
+    params:
+      jobs_directory: /data/share/staging
+
+  pulsar_sanjay_tpv:
+    inherits: _pulsar
+    runner: pulsar_de01
+    scheduling:
+      require:
+        - sanjay-pulsar
+
+  # BYOC: generated blocks go above this line

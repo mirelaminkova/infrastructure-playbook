@@ -1,0 +1,33 @@
+---
+# test.usegalaxy.be (https://github.com/usegalaxy-be/infrastructure-playbook).
+# RabbitMQ only. Users' Pulsars connect to test.usegalaxy.be:59871, a port
+# forward to the RabbitMQ that Galaxy reaches on 127.0.0.1:5671.
+name: test.usegalaxy.be
+galaxy_url: https://test.usegalaxy.be
+mq_host: 127.0.0.1:5671
+job_conf: inventories/host_vars/test.usegalaxy.be/galaxy_job_conf.yml
+destinations: templates/galaxy/config/tpv/destinations.yml.j2
+mq_vars: inventories/host_vars/test.usegalaxy.be/messaging.yml
+# Passwords are inline !vault values (vault id "byoc") in a plain file, so
+# only the runs that use them need the BYOC vault password.
+mq_vault: inventories/host_vars/test.usegalaxy.be/byoc.yml
+secrets: inline
+vault_id: byoc
+runner_format: mapping
+destination_parent: _pulsar
+mq_runner_params:
+  manager: production
+  amqp_acknowledge: "true"
+  amqp_ack_republish_time: "300"
+  amqp_consumer_timeout: "15.0"
+  amqp_publish_retry: "true"
+  amqp_publish_retry_max_retries: "60"
+anchors:
+  - path: inventories/host_vars/test.usegalaxy.be/galaxy_job_conf.yml
+    pattern: "\\s*# BYOC: generated blocks go above this line"
+  - path: templates/galaxy/config/tpv/destinations.yml.j2
+    pattern: "\\s*# BYOC: generated blocks go above this line"
+  - path: inventories/host_vars/test.usegalaxy.be/messaging.yml
+    pattern: "\\s*# BYOC: generated blocks go above this line"
+  - path: inventories/host_vars/test.usegalaxy.be/byoc.yml
+    pattern: "# BYOC: generated blocks go above this line"

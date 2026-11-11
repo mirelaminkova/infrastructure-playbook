@@ -176,6 +176,24 @@ python scripts/byoc/byoc_relay_accounts.py             # create/update
 `.github/workflows/byoc-relay-accounts.yml` runs it on pushes to master
 that touch `job_conf.yml` or the relay vault, again only in usegalaxy-eu.
 
+## Other Galaxy servers
+
+The script also works for a Galaxy other than usegalaxy.eu. Everything that differs between servers is in a small YAML file passed with `--site` (or `BYOC_SITE`). Without it the script uses usegalaxy.eu's settings, which are also written out in `sites/usegalaxy.eu.yml`.
+
+A site file sets the Galaxy URL, the RabbitMQ address Galaxy's runners use, the paths of the job configuration, the TPV destinations, the RabbitMQ users and the secrets file, and the line in each file that generated blocks go above. It also sets how runners are written (`list` as on usegalaxy.eu, or `mapping` with the runner id as key), the parent of the generated destinations, and the extra runner settings.
+
+Secrets can go into a whole-file ansible-vault file, as on usegalaxy.eu, or into a plain file as inline `!vault` values (`secrets: inline` with a `vault_id`). Inline values are only decrypted when a task uses them, so playbook runs that do not touch BYOC endpoints need no BYOC vault password. A value is only re-encrypted when it changes, so a re-run gives no diff. Inline secrets support the mq transport only; leave `relay_vault` out and the form's relay option is rejected.
+
+`sites/test.usegalaxy.be.yml` is an example: runners as a mapping, destinations inheriting `_pulsar`, and inline secrets with vault id `byoc`:
+
+```bash
+export ANSIBLE_VAULT_PASSWORD_FILE=~/.config/ansible/byoc-test.pass
+python scripts/byoc/byoc_sync.py --site scripts/byoc/sites/test.usegalaxy.be.yml \
+  --root ../infrastructure-playbook --prefs-json export.json --dry-run
+```
+
+`byoc_relay_accounts.py` manages accounts on usegalaxy.eu's central relay and stays specific to usegalaxy.eu.
+
 ## Tests
 
 ```bash
