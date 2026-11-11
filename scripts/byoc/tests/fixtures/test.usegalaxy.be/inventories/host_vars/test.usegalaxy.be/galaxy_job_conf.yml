@@ -1,0 +1,14 @@
+---
+galaxy_job_config:
+  runners:
+    local_runner:
+      load: galaxy.jobs.runners.local:LocalJobRunner
+      workers: 4
+    pulsar_sl01:
+      load: galaxy.jobs.runners.pulsar:PulsarMQJobRunner
+      amqp_url: "pyamqp://pulsar_sl01:{{ vault_rabbitmq_password_pulsar_esg }}@127.0.0.1:5671//pulsar/pulsar_sl01?ssl=1"
+      galaxy_url: "https://{{ inventory_hostname }}"
+      manager: production
+    # BYOC: generated blocks go above this line
+  handling:
+    assign: ['db-skip-locked']

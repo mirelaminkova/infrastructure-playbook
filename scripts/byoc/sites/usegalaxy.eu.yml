@@ -1,0 +1,32 @@
+---
+# usegalaxy.eu. byoc_sync.py uses these settings when --site is not given.
+name: usegalaxy.eu
+galaxy_url: https://usegalaxy.eu
+mq_host: mq.galaxyproject.eu:5671
+job_conf: templates/galaxy/config/job_conf.yml
+destinations: files/galaxy/tpv/destinations.yml.j2
+mq_vars: group_vars/mq.yml
+mq_vault: secret_group_vars/pulsar.yml
+relay_vault: group_vars/pulsar_relay/vault.yml
+runner_format: list
+destination_parent: pulsar_default
+mq_runner_params:
+  manager: production
+  amqp_acknowledge: '"true"'
+  amqp_ack_republish_time: "300"
+  amqp_consumer_timeout: "2.0"
+  amqp_publish_retry: '"true"'
+  amqp_publish_retry_max_retries: "60"
+secrets: vault_file
+anchors:
+  - path: templates/galaxy/config/job_conf.yml
+    pattern: "  default_destination:"
+    before_blank: true
+  - path: files/galaxy/tpv/destinations.yml.j2
+    pattern: "  # LOCAL CONDOR DESTINATIONS #"
+    before_blank: false
+  - path: group_vars/mq.yml
+    pattern: "rabbitmq_plugins:"
+    before_blank: true
+central_relay_var: pulsar_byoc_central_relay_url
+central_relay_host: stargate.galaxyproject.eu

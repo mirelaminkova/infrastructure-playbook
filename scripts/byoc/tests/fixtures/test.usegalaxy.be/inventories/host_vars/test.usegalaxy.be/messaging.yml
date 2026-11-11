@@ -1,0 +1,6 @@
+---
+rabbitmq_users:
+  - user: pulsar_sl01
+    password: "{{ vault_rabbitmq_password_pulsar_esg }}"
+    vhost: /pulsar/pulsar_sl01
+  # BYOC: generated blocks go above this line
